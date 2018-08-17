@@ -76,7 +76,7 @@ fn prefix(input: &[u8]) -> IResult<&[u8], Prefix> {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Message<'a> {
+pub(crate) struct Message<'a> {
     pub tags: Vec<Tag<'a>>,
     pub prefix: Option<Prefix<'a>>,
     pub command: &'a [u8],
@@ -104,7 +104,7 @@ fn command(input: &[u8]) -> IResult<&[u8], &[u8]> {
 }
 
 named!(
-    pub message<Message>,
+    message<Message>,
     do_parse!(
         tags: opt!(delimited!(char!('@'), tags, char!(' '))) >>
         prefix: opt!(delimited!(char!(':'), prefix, char!(' '))) >>
@@ -127,6 +127,12 @@ named!(
         })
     )
 );
+
+impl<'a> Message<'a> {
+    pub(crate) fn parse(data: &'a [u8]) -> Option<Self> {
+        message(data).ok().and_then(|(left, ret)| if left.is_empty() { None } else { Some(ret) })
+    }
+}
 
 #[cfg(test)]
 mod tests {
