@@ -1,4 +1,6 @@
-#[derive(Debug, PartialEq)]
+use crate::data::RawCommandAndArgs;
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum Command<'a> {
     Privmsg {
         channel: &'a [u8],
@@ -7,24 +9,56 @@ pub enum Command<'a> {
     Unknown {
         command: &'a [u8],
         args: Vec<&'a [u8]>,
+        rest: Option<&'a [u8]>,
     },
 }
 
-impl<'a> Command<'a> {
-    pub fn with_command_args(command: &'a [u8], args: Vec<&'a [u8]>) -> Self {
-        let ret = Command::command_args_internal(command, args);
-        ret.unwrap_or_else(|(command, args)| Command::Unknown { command, args })
-    }
-
-    fn command_args_internal(command: &'a [u8], mut args: Vec<&'a [u8]>) -> Result<Self, (&'a [u8], Vec<&'a [u8]>)> {
-        Ok(match command {
-            b"PRIVMSG" if args.len() == 2 => {
-                let message = args.pop().unwrap();
+impl<'a> From<RawCommandAndArgs<'a>> for Command<'a> {
+    fn from(RawCommandAndArgs { command, mut args, rest }: RawCommandAndArgs<'a>) -> Self {
+        match (command, rest) {
+            (b"PRIVMSG", Some(rest)) if args.len() == 1 => {
                 let channel = args.pop().unwrap();
+                let message = rest;
                 Command::Privmsg { channel, message }
             },
-            _ => return Err((command, args)),
-        })
+            _ => Command::Unknown { command, args, rest },
+        }
+    }
+}
+
+impl<'r, 'a> Into<RawCommandAndArgs<'a>> for &'r Command<'a> {
+    fn into(self) -> RawCommandAndArgs<'a> {
+        let mut args = vec![];
+        let (command, rest) = match self {
+            &Command::Privmsg { channel, message } => {
+                args.push(channel);
+                (b"PRIVMSG".as_ref(), Some(message))
+            },
+            &Command::Unknown { command, ref args, rest } => {
+                return RawCommandAndArgs { command, args: args.clone(), rest };
+            },
+        };
+        RawCommandAndArgs { command, args, rest }
+    }
+}
+
+impl<'a> Into<RawCommandAndArgs<'a>> for Command<'a> {
+    fn into(self) -> RawCommandAndArgs<'a> {
+        let (command, args, rest) = match self {
+            Command::Privmsg { channel, message } => {
+                (b"PRIVMSG".as_ref(), vec![channel], Some(message))
+            },
+            Command::Unknown { command, args, rest } => {
+                (command, args, rest)
+            },
+        };
+        RawCommandAndArgs { command, args, rest }
+    }
+}
+
+impl<'a> Into<Vec<u8>> for Command<'a> {
+    fn into(self) -> Vec<u8> {
+        <Command as Into<RawCommandAndArgs>>::into(self).into()
     }
 }
 
@@ -34,30 +68,41 @@ mod tests {
 
     #[test]
     fn test_with_command_args() {
-        let command = b"PRIVMSG";
-        let args = vec![b"#foo".as_ref(), b"Hello, world!".as_ref()];
-        let result = Command::with_command_args(command, args);
+        let input = RawCommandAndArgs {
+            command: b"PRIVMSG".as_ref(),
+            args: vec![b"#foo".as_ref()],
+            rest: Some(b"Hello, world!".as_ref()),
+        };
+        let result = Command::from(input);
         let expected = Command::Privmsg {
             channel: b"#foo".as_ref(),
             message: b"Hello, world!".as_ref(),
         };
         assert_eq!(result, expected);
 
-        let command = b"PRIVMSG";
-        let args = vec![b"#foo".as_ref(), b"a".as_ref(), b"Hello, world!".as_ref()];
-        let result = Command::with_command_args(command, args);
+        let input = RawCommandAndArgs {
+            command: b"PRIVMSG".as_ref(),
+            args: vec![b"#foo".as_ref(), b"a".as_ref()],
+            rest: Some(b"Hello, world!".as_ref()),
+        };
+        let result = Command::from(input);
         let expected = Command::Unknown {
             command: b"PRIVMSG".as_ref(),
-            args: vec![b"#foo".as_ref(), b"a".as_ref(), b"Hello, world!".as_ref()],
+            args: vec![b"#foo".as_ref(), b"a".as_ref()],
+            rest: Some(b"Hello, world!".as_ref()),
         };
         assert_eq!(result, expected);
 
-        let command = b"FOO";
-        let args = vec![b"BAR".as_ref(), b"baz quux".as_ref()];
-        let result = Command::with_command_args(command, args);
+        let input = RawCommandAndArgs {
+            command: b"FOO".as_ref(),
+            args: vec![b"BAR".as_ref()],
+            rest: Some(b"baz quux".as_ref()),
+        };
+        let result = Command::from(input);
         let expected = Command::Unknown {
             command: b"FOO".as_ref(),
-            args: vec![b"BAR".as_ref(), b"baz quux".as_ref()],
+            args: vec![b"BAR".as_ref()],
+            rest: Some(b"baz quux".as_ref()),
         };
         assert_eq!(result, expected);
     }

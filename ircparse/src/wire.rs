@@ -1,12 +1,7 @@
 use lazy_static::lazy_static;
 use nom::*;
 use regex::bytes::Regex;
-
-#[derive(Debug, PartialEq)]
-pub struct Tag<'a> {
-    key: &'a [u8],
-    value: Option<&'a [u8]>,
-}
+use crate::data::{RawCommandAndArgs, Tag, Prefix};
 
 fn tag(input: &[u8]) -> IResult<&[u8], Tag> {
     lazy_static! {
@@ -34,13 +29,6 @@ fn tag(input: &[u8]) -> IResult<&[u8], Tag> {
 }
 
 named!(tags<Vec<Tag>>, separated_nonempty_list!(char!(';'), tag));
-
-#[derive(Debug, PartialEq)]
-pub struct Prefix<'a> {
-    nickname: &'a [u8],
-    user: Option<&'a [u8]>,
-    host: Option<&'a [u8]>,
-}
 
 fn prefix(input: &[u8]) -> IResult<&[u8], Prefix> {
     lazy_static! {
@@ -79,8 +67,7 @@ fn prefix(input: &[u8]) -> IResult<&[u8], Prefix> {
 pub(crate) struct Message<'a> {
     pub tags: Vec<Tag<'a>>,
     pub prefix: Option<Prefix<'a>>,
-    pub command: &'a [u8],
-    pub args: Vec<&'a [u8]>,
+    pub command_and_args: RawCommandAndArgs<'a>,
 }
 
 fn command(input: &[u8]) -> IResult<&[u8], &[u8]> {
@@ -109,21 +96,28 @@ named!(
         tags: opt!(delimited!(char!('@'), tags, char!(' '))) >>
         prefix: opt!(delimited!(char!(':'), prefix, char!(' '))) >>
         command: command >>
-        args: many0!(
+        args: many_till!(
             preceded!(
                 char!(' '),
-                alt!(
-                    preceded!(char!(':'), take_until!("\r\n")) |
-                    take_till!(|c: u8| match c { b' ' | b'\r' | b'\n' => true, _ => false })
-                )
+                take_till!(|c: u8| match c { b' ' | b'\r' | b'\n' => true, _ => false })
+            ),
+            peek!(alt!(tag!(" :") | tag!("\r\n")))
+        ) >>
+        rest: opt!(
+            preceded!(
+                tag!(" :"),
+                take_until!("\r\n")
             )
         ) >>
         tag!("\r\n") >>
         (Message {
             tags: tags.unwrap_or_else(|| vec![]),
             prefix,
-            command,
-            args,
+            command_and_args: RawCommandAndArgs {
+                command,
+                args: args.0,
+                rest,
+            },
         })
     )
 );
@@ -230,12 +224,14 @@ mod tests {
                 user: None,
                 host: None,
             }),
-            command: &b"CAP"[..],
-            args: vec![
-                &b"LS"[..],
-                &b"*"[..],
-                &b"multi-prefix extended-join sasl"[..],
-            ],
+            command_and_args: RawCommandAndArgs {
+                command: &b"CAP"[..],
+                args: vec![
+                    &b"LS"[..],
+                    &b"*"[..],
+                ],
+                rest: Some(&b"multi-prefix extended-join sasl"[..]),
+            }
         };
         assert_eq!(result, Ok((left, expected)));
 
@@ -252,8 +248,11 @@ mod tests {
                 user: Some(&b"d"[..]),
                 host: Some(&b"localhost"[..]),
             }),
-            command: &b"PRIVMSG"[..],
-            args: vec![&b"#chan"[..], &b"Hey what's up!"[..]],
+            command_and_args: RawCommandAndArgs {
+                command: &b"PRIVMSG"[..],
+                args: vec![&b"#chan"[..]],
+                rest: Some(&b"Hey what's up!"[..]),
+            },
         };
         assert_eq!(result, Ok((left, expected)));
 
@@ -263,8 +262,11 @@ mod tests {
         let expected = Message {
             tags: vec![],
             prefix: None,
-            command: &b"CAP"[..],
-            args: vec![&b"REQ"[..], &b"sasl"[..]],
+            command_and_args: RawCommandAndArgs {
+                command: &b"CAP"[..],
+                args: vec![&b"REQ"[..]],
+                rest: Some(&b"sasl"[..]),
+            },
         };
         assert_eq!(result, Ok((left, expected)));
     }
