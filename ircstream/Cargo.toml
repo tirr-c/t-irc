@@ -1,0 +1,12 @@
+cargo-features = ["edition"]
+
+[package]
+name = "ircstream"
+version = "0.1.0"
+authors = ["Wonwoo Choi <chwo9843@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+tokio-codec = "0.1.0"  # Decoder, Encoder
+bytes = "0.4.9"  # BufMut
+ircparse = { path = "../ircparse", version = "0.1.0" }

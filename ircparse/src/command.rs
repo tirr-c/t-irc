@@ -1,44 +1,29 @@
+use std::borrow::Cow;
 use crate::data::RawCommandAndArgs;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Command<'a> {
     Privmsg {
-        channel: &'a [u8],
-        message: &'a [u8],
+        channel: Cow<'a, [u8]>,
+        message: Cow<'a, [u8]>,
     },
     Unknown {
-        command: &'a [u8],
-        args: Vec<&'a [u8]>,
-        rest: Option<&'a [u8]>,
+        command: Cow<'a, [u8]>,
+        args: Vec<Cow<'a, [u8]>>,
+        rest: Option<Cow<'a, [u8]>>,
     },
 }
 
 impl<'a> From<RawCommandAndArgs<'a>> for Command<'a> {
     fn from(RawCommandAndArgs { command, mut args, rest }: RawCommandAndArgs<'a>) -> Self {
-        match (command, rest) {
-            (b"PRIVMSG", Some(rest)) if args.len() == 1 => {
+        match (command.as_ref(), rest, args.len()) {
+            (b"PRIVMSG", Some(rest), 1) => {
                 let channel = args.pop().unwrap();
                 let message = rest;
                 Command::Privmsg { channel, message }
             },
-            _ => Command::Unknown { command, args, rest },
+            (_, rest, _) => Command::Unknown { command, args, rest },
         }
-    }
-}
-
-impl<'r, 'a> Into<RawCommandAndArgs<'a>> for &'r Command<'a> {
-    fn into(self) -> RawCommandAndArgs<'a> {
-        let mut args = vec![];
-        let (command, rest) = match self {
-            &Command::Privmsg { channel, message } => {
-                args.push(channel);
-                (b"PRIVMSG".as_ref(), Some(message))
-            },
-            &Command::Unknown { command, ref args, rest } => {
-                return RawCommandAndArgs { command, args: args.clone(), rest };
-            },
-        };
-        RawCommandAndArgs { command, args, rest }
     }
 }
 
@@ -46,7 +31,7 @@ impl<'a> Into<RawCommandAndArgs<'a>> for Command<'a> {
     fn into(self) -> RawCommandAndArgs<'a> {
         let (command, args, rest) = match self {
             Command::Privmsg { channel, message } => {
-                (b"PRIVMSG".as_ref(), vec![channel], Some(message))
+                (b"PRIVMSG".as_ref().into(), vec![channel], Some(message))
             },
             Command::Unknown { command, args, rest } => {
                 (command, args, rest)
@@ -59,6 +44,24 @@ impl<'a> Into<RawCommandAndArgs<'a>> for Command<'a> {
 impl<'a> Into<Vec<u8>> for Command<'a> {
     fn into(self) -> Vec<u8> {
         <Command as Into<RawCommandAndArgs>>::into(self).into()
+    }
+}
+
+impl<'a> Command<'a> {
+    pub fn into_owned(self) -> Command<'static> {
+        use self::Command::*;
+
+        match self {
+            Privmsg { channel, message } => Privmsg {
+                channel: channel.into_owned().into(),
+                message: message.into_owned().into(),
+            },
+            Unknown { command, args, rest } => Unknown {
+                command: command.into_owned().into(),
+                args: args.into_iter().map(|arg| arg.into_owned().into()).collect(),
+                rest: rest.map(|rest| rest.into_owned().into()),
+            },
+        }
     }
 }
 

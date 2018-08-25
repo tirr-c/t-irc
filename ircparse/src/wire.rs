@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use lazy_static::lazy_static;
 use nom::*;
 use regex::bytes::Regex;
@@ -22,8 +23,8 @@ fn tag(input: &[u8]) -> IResult<&[u8], Tag> {
     };
     let full_match = capture.get(0).unwrap();
     let left = &input[full_match.end()..];
-    let key = capture.name("key").unwrap().as_bytes();
-    let value = capture.name("value").map(|x| x.as_bytes());
+    let key = capture.name("key").unwrap().as_bytes().into();
+    let value = capture.name("value").map(|x| x.as_bytes().into());
 
     Ok((left, Tag { key, value }))
 }
@@ -49,9 +50,9 @@ fn prefix(input: &[u8]) -> IResult<&[u8], Prefix> {
     };
     let full_match = capture.get(0).unwrap();
     let left = &input[full_match.end()..];
-    let nickname = capture.name("nickname").unwrap().as_bytes();
-    let user = capture.name("user").map(|x| x.as_bytes());
-    let host = capture.name("host").map(|x| x.as_bytes());
+    let nickname = capture.name("nickname").unwrap().as_bytes().into();
+    let user = capture.name("user").map(|x| x.as_bytes().into());
+    let host = capture.name("host").map(|x| x.as_bytes().into());
 
     Ok((
         left,
@@ -70,7 +71,7 @@ pub(crate) struct Message<'a> {
     pub command_and_args: RawCommandAndArgs<'a>,
 }
 
-fn command(input: &[u8]) -> IResult<&[u8], &[u8]> {
+fn command(input: &[u8]) -> IResult<&[u8], Cow<[u8]>> {
     lazy_static! {
         static ref COMMAND_REGEX: Regex = Regex::new(r"^[A-Za-z_\-]+|[0-9]{3}").unwrap();
     }
@@ -87,7 +88,7 @@ fn command(input: &[u8]) -> IResult<&[u8], &[u8]> {
     };
     let left = &input[command.end()..];
 
-    Ok((left, command.as_bytes()))
+    Ok((left, command.as_bytes().into()))
 }
 
 named!(
@@ -99,7 +100,10 @@ named!(
         args: many_till!(
             preceded!(
                 char!(' '),
-                take_till!(|c: u8| match c { b' ' | b'\r' | b'\n' => true, _ => false })
+                map!(
+                    take_till!(|c: u8| match c { b' ' | b'\r' | b'\n' => true, _ => false }),
+                    Into::into
+                )
             ),
             peek!(alt!(tag!(" :") | tag!("\r\n")))
         ) >>
@@ -116,15 +120,23 @@ named!(
             command_and_args: RawCommandAndArgs {
                 command,
                 args: args.0,
-                rest,
+                rest: rest.map(Into::into),
             },
         })
     )
 );
 
 impl<'a> Message<'a> {
-    pub(crate) fn parse(data: &'a [u8]) -> Option<Self> {
-        message(data).ok().and_then(|(left, ret)| if left.is_empty() { None } else { Some(ret) })
+    pub(crate) fn parse(data: &'a [u8]) -> Result<(Self, &'a [u8]), Option<&'a [u8]>> {
+        message(data)
+            .map(|(left, msg)| (msg, left))
+            .map_err(|err| match err {
+                | nom::Err::Incomplete(_)
+                => None,
+                | nom::Err::Error(nom::Context::Code(input, _))
+                | nom::Err::Failure(nom::Context::Code(input, _))
+                => Some(input),
+            })
     }
 }
 
